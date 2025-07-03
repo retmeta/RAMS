@@ -1,11 +1,10 @@
-### app.py
 import streamlit as st
-from utils import simulate
-from plots import plot_downtime_distribution, plot_cost_comparison, plot_sensitivity_analysis
 import pandas as pd
 import numpy as np
+import plotly.express as px
+import plotly.graph_objects as go
 
-# Page configuration
+# --- Configuration ---
 st.set_page_config(
     page_title="IT Infrastructure Reliability Analysis",
     layout="wide"
@@ -14,10 +13,47 @@ st.set_page_config(
 st.title("RAMS en SLA van Optical Repeater incl. SLA kosten")
 st.markdown("Monte Carlo simulatie voor infrastructuur betrouwbaarheidsanalyse met SLA vergelijking")
 
-# Sidebar configuration
+# --- Helper Functions ---
+@st.cache_data
+def simulate(
+    components: dict,
+    mttr_key: str,
+    sla_active: bool,
+    n_sims: int,
+    sla_yearly_cost: float,
+    callout: float,
+    engineer_hourly: float,
+    seasonal_factor: float = 1.0
+) -> tuple[np.ndarray, np.ndarray]:
+    """Run Monte Carlo simulation for infrastructure reliability analysis."""
+    np.random.seed(42)
+    hours_per_year = 8760 * seasonal_factor
+
+    # Preallocate arrays
+    failures = {
+        name: np.random.poisson((hours_per_year / params["MTBF"]), n_sims)
+        for name, params in components.items()
+    }
+
+    total_downtime = np.zeros(n_sims)
+    total_cost = np.full(n_sims, sla_yearly_cost if sla_active else 0)
+
+    for name, params in components.items():
+        mttr = params[mttr_key]
+        repairs = {
+            i: np.sum(np.random.exponential(mttr, f)) if f > 0 else 0
+            for i, f in enumerate(failures[name])
+        }
+        repair_times = np.array(list(repairs.values()))
+
+        total_downtime += repair_times
+        total_cost += failures[name] * callout + repair_times * engineer_hourly
+
+    return total_downtime, total_cost
+
+# --- Sidebar Inputs ---
 st.sidebar.header("Simulatie Parameters")
 
-# Component defaults
 if 'components' not in st.session_state:
     st.session_state.components = {
         "Repeater": {"MTBF": 100_000, "MTTR_no_SLA": 72, "MTTR_with_SLA": 12},
@@ -28,7 +64,6 @@ if 'components' not in st.session_state:
 
 components = st.session_state.components
 
-# Sidebar controls
 for name, params in components.items():
     st.sidebar.subheader(name)
     params["MTBF"] = st.sidebar.number_input(f"{name} - MTBF (uren)", 1000, 1_000_000, params["MTBF"], step=1000)
@@ -42,20 +77,20 @@ inflation_rate = st.sidebar.number_input("Inflatie per jaar (%)", 0.0, 10.0, 4.5
 # Simulation parameters
 n_simulations = st.sidebar.number_input("Aantal simulaties", 1_000, 50_000, 10_000, step=1_000)
 
-# Start simulation
+# --- Run Simulation ---
 if st.sidebar.button("Start Simulatie", type="primary"):
     with st.spinner("Monte Carlo simulatie wordt uitgevoerd..."):
-        
-        # Inflation correction
         inflation_factor = (1 + inflation_rate / 100) ** 3
         sla_cost_per_year = (sla_cost_total / 5) * inflation_factor
-        
-        # Run simulations
+
+        # Simulate
         downtime_no_sla, costs_no_sla = simulate(
-            components, "MTTR_no_SLA", False, n_simulations, sla_cost_per_year, seasonal_factor=1.0
+            components, "MTTR_no_SLA", False, n_simulations,
+            sla_cost_per_year, callout=250, engineer_hourly=150
         )
         downtime_with_sla, costs_with_sla = simulate(
-            components, "MTTR_with_SLA", True, n_simulations, sla_cost_per_year, seasonal_factor=1.0
+            components, "MTTR_with_SLA", True, n_simulations,
+            sla_cost_per_year, callout=175, engineer_hourly=110
         )
 
         # Store in session
@@ -66,11 +101,11 @@ if st.sidebar.button("Start Simulatie", type="primary"):
             "costs_with_sla": costs_with_sla
         }
 
-# Display results
+# --- Display Results ---
 if "results" in st.session_state:
     res = st.session_state["results"]
     
-    st.header("Belangrijkste Resultaten")
+    st.header("Resultaten")
     col1, col2 = st.columns(2)
     with col1:
         st.metric("Gem. Downtime (Zonder SLA)", f"{np.mean(res['downtime_no_sla']):.1f} uren")
@@ -79,12 +114,20 @@ if "results" in st.session_state:
         st.metric("Gem. Downtime (Met SLA)", f"{np.mean(res['downtime_with_sla']):.1f} uren")
         st.metric("Gem. Kosten (Met SLA)", f"€{np.mean(res['costs_with_sla']):,.0f}")
 
-    # Plots
+    # Downtime distribution
     st.subheader("Downtime Verdeling")
-    st.plotly_chart(plot_downtime_distribution(res), use_container_width=True)
+    fig = go.Figure()
+    fig.add_trace(go.Histogram(x=res['downtime_no_sla'], name="Zonder SLA", opacity=0.6, marker_color="red"))
+    fig.add_trace(go.Histogram(x=res['downtime_with_sla'], name="Met SLA", opacity=0.6, marker_color="green"))
+    fig.update_layout(barmode='overlay', xaxis_title="Downtime (uren)", yaxis_title="Frequentie")
+    st.plotly_chart(fig, use_container_width=True)
 
+    # Cost comparison
     st.subheader("Kosten Vergelijking")
-    st.plotly_chart(plot_cost_comparison(res), use_container_width=True)
-
-    st.subheader("Gevoeligheidsanalyse")
-    st.plotly_chart(plot_sensitivity_analysis(components, sla_cost_per_year), use_container_width=True)
+    df_costs = pd.DataFrame({
+        "Scenario": ["Zonder SLA"] * n_simulations + ["Met SLA"] * n_simulations,
+        "Kosten": np.concatenate([res['costs_no_sla'], res['costs_with_sla']])
+    })
+    fig_box = px.box(df_costs, x="Scenario", y="Kosten", color="Scenario",
+                     color_discrete_map={"Zonder SLA": "red", "Met SLA": "green"})
+    st.plotly_chart(fig_box, use_container_width=True)
