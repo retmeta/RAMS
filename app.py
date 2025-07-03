@@ -108,7 +108,32 @@ if st.sidebar.button("Start Simulatie", type="primary"):
 if "results" in st.session_state:
     res = st.session_state["results"]
     
-    st.header("Resultaten")
+    # Input Summary
+    st.header("Gebruikte Simulatie Parameters")
+    col1, col2 = st.columns(2)
+    with col1:
+        st.subheader("Component Parameters")
+        input_data = []
+        for comp_name, comp_data in components.items():
+            input_data.append([f"{comp_name} - MTBF", f"{comp_data['MTBF']:,} uren"])
+            input_data.append([f"{comp_name} - MTTR (zonder SLA)", f"{comp_data['MTTR_no_SLA']} uren"])
+            input_data.append([f"{comp_name} - MTTR (met SLA)", f"{comp_data['MTTR_with_SLA']} uren"])
+        input_df = pd.DataFrame(input_data, columns=['Parameter', 'Waarde'])
+        st.dataframe(input_df, use_container_width=True, hide_index=True)
+    with col2:
+        st.subheader("Kosten Parameters")
+        cost_data = [
+            ["Aantal simulaties", f"{n_simulations:,}"],
+            ["SLA kosten (5 jaar)", f"€{sla_cost_total:,}"],
+            ["SLA kosten per jaar (geïndexeerd)", f"€{sla_cost_per_year:,.2f}"],
+            ["Inflatie percentage (per jaar)", f"{inflation_rate:.1f}%"],
+            ["Inflatie factor (3 jaar compound)", f"{inflation_factor:.2f}x"],
+        ]
+        cost_df = pd.DataFrame(cost_data, columns=['Parameter', 'Waarde'])
+        st.dataframe(cost_df, use_container_width=True, hide_index=True)
+
+    # Key Metrics
+    st.header("Belangrijkste Resultaten")
     col1, col2 = st.columns(2)
     with col1:
         st.metric("Gem. Downtime (Zonder SLA)", f"{np.mean(res['downtime_no_sla']):.1f} uren")
@@ -117,7 +142,38 @@ if "results" in st.session_state:
         st.metric("Gem. Downtime (Met SLA)", f"{np.mean(res['downtime_with_sla']):.1f} uren")
         st.metric("Gem. Kosten (Met SLA)", f"€{np.mean(res['costs_with_sla']):,.0f}")
 
-    # Downtime distribution
+    # Statistical Summary
+    st.header("Statistische Samenvatting")
+    summary_df = pd.DataFrame({
+        'Statistiek': ['Gemiddelde', 'Mediaan', 'Standaardafwijking', '95e Percentiel'],
+        'Downtime Zonder SLA': [
+            f"{np.mean(res['downtime_no_sla']):.1f}u",
+            f"{np.median(res['downtime_no_sla']):.1f}u",
+            f"{np.std(res['downtime_no_sla']):.1f}u",
+            f"{np.percentile(res['downtime_no_sla'], 95):.1f}u",
+        ],
+        'Downtime Met SLA': [
+            f"{np.mean(res['downtime_with_sla']):.1f}u",
+            f"{np.median(res['downtime_with_sla']):.1f}u",
+            f"{np.std(res['downtime_with_sla']):.1f}u",
+            f"{np.percentile(res['downtime_with_sla'], 95):.1f}u",
+        ],
+        'Kosten Zonder SLA': [
+            f"€{np.mean(res['costs_no_sla']):,.0f}",
+            f"€{np.median(res['costs_no_sla']):,.0f}",
+            f"€{np.std(res['costs_no_sla']):,.0f}",
+            f"€{np.percentile(res['costs_no_sla'], 95):,.0f}",
+        ],
+        'Kosten Met SLA': [
+            f"€{np.mean(res['costs_with_sla']):,.0f}",
+            f"€{np.median(res['costs_with_sla']):,.0f}",
+            f"€{np.std(res['costs_with_sla']):,.0f}",
+            f"€{np.percentile(res['costs_with_sla'], 95):,.0f}",
+        ],
+    })
+    st.dataframe(summary_df, use_container_width=True, hide_index=True)
+
+    # Downtime Distribution Plot
     st.subheader("Downtime Verdeling")
     fig = go.Figure()
     fig.add_trace(go.Histogram(x=res['downtime_no_sla'], name="Zonder SLA", opacity=0.6, marker_color="red"))
@@ -125,7 +181,7 @@ if "results" in st.session_state:
     fig.update_layout(barmode='overlay', xaxis_title="Downtime (uren)", yaxis_title="Frequentie")
     st.plotly_chart(fig, use_container_width=True)
 
-    # Cost comparison
+    # Cost Comparison Box Plot
     st.subheader("Kosten Vergelijking")
     df_costs = pd.DataFrame({
         "Scenario": ["Zonder SLA"] * n_simulations + ["Met SLA"] * n_simulations,
@@ -134,3 +190,13 @@ if "results" in st.session_state:
     fig_box = px.box(df_costs, x="Scenario", y="Kosten", color="Scenario",
                      color_discrete_map={"Zonder SLA": "red", "Met SLA": "green"})
     st.plotly_chart(fig_box, use_container_width=True)
+
+    # Download Results
+    st.subheader("Download Resultaten")
+    csv = pd.DataFrame({
+        'Downtime_Zonder_SLA': res['downtime_no_sla'],
+        'Kosten_Zonder_SLA': res['costs_no_sla'],
+        'Downtime_Met_SLA': res['downtime_with_sla'],
+        'Kosten_Met_SLA': res['costs_with_sla']
+    }).to_csv(index=False)
+    st.download_button("Download Simulatie Resultaten (CSV)", csv, "simulatie_resultaten.csv", "text/csv")
