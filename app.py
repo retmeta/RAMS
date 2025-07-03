@@ -29,27 +29,30 @@ def simulate(
     np.random.seed(42)
     hours_per_year = 8760 * seasonal_factor
 
-    # Preallocate arrays
-    failures = {
-        name: np.random.poisson((hours_per_year / params["MTBF"]), n_sims)
-        for name, params in components.items()
-    }
+    total_downtime = []
+    total_cost = []
 
-    total_downtime = np.zeros(n_sims)
-    total_cost = np.full(n_sims, sla_yearly_cost if sla_active else 0)
+    for _ in range(n_sims):
+        downtime = 0
+        cost = sla_yearly_cost if sla_active else 0
 
-    for name, params in components.items():
-        mttr = params[mttr_key]
-        repairs = {
-            i: np.sum(np.random.exponential(mttr, f)) if f > 0 else 0
-            for i, f in enumerate(failures[name])
-        }
-        repair_times = np.array(list(repairs.values()))
+        for name, params in components.items():
+            mtbf = params["MTBF"]
+            mttr = params[mttr_key]
 
-        total_downtime += repair_times
-        total_cost += failures[name] * callout + repair_times * engineer_hourly
+            # Number of failures this year
+            num_failures = np.random.poisson(hours_per_year / mtbf)
 
-    return total_downtime, total_cost
+            if num_failures > 0:
+                repair_times = np.random.exponential(mttr, num_failures)
+                downtime += repair_times.sum()
+                cost += num_failures * callout + repair_times.sum() * engineer_hourly
+
+        total_downtime.append(downtime)
+        total_cost.append(cost)
+
+    return np.array(total_downtime), np.array(total_cost)
+
 
 # --- Sidebar Inputs ---
 st.sidebar.header("Simulatie Parameters")
